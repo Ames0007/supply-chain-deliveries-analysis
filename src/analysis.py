@@ -1,46 +1,132 @@
 from pathlib import Path
-import pandas as pd
+
 import matplotlib.pyplot as plt
-from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.model_selection import train_test_split
 
 ROOT = Path(__file__).resolve().parents[1]
-DATA = ROOT / "data" / "supply_chain_deliveries.csv"
-CHARTS = ROOT / "images" / "charts"
-CHARTS.mkdir(parents=True, exist_ok=True)
+DATA_PATH = ROOT / "data" / "supply_chain_deliveries.csv"
+IMAGES_DIR = ROOT / "images"
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
-df = pd.read_csv(DATA, parse_dates=["WorkDate"]).sort_values("WorkDate")
-print(df.info())
-print(df.describe(include="all"))
+# Load data
+df = pd.read_csv(DATA_PATH)
+df["WorkDate"] = pd.to_datetime(df["WorkDate"])
 
-monthly = df.set_index("WorkDate").resample("MS")["TotalRevenue"].sum()
-ax = monthly.plot(figsize=(11, 5), title="Monthly Revenue")
-ax.set_xlabel("Month"); ax.set_ylabel("Revenue ($)")
-plt.tight_layout(); plt.savefig(CHARTS / "monthly_revenue.png", dpi=160); plt.close()
+print("Dataset shape:", df.shape)
+print("\nMissing values:")
+print(df.isnull().sum())
 
-customer = df.groupby("Customer")["TotalRevenue"].sum().sort_values(ascending=True)
-ax = customer.plot.barh(figsize=(9, 6), title="Revenue by Customer")
-ax.set_xlabel("Revenue ($)")
-plt.tight_layout(); plt.savefig(CHARTS / "revenue_by_customer.png", dpi=160); plt.close()
+print("\nSummary statistics:")
+print(df.describe())
 
-model_df = df.copy()
-model_df["Year"] = model_df.WorkDate.dt.year
-model_df["Month"] = model_df.WorkDate.dt.month
-model_df["DayOfWeek"] = model_df.WorkDate.dt.dayofweek
-features = ["Customer", "Location", "BusinessType", "OrderCount", "NumberOfPieces", "Year", "Month", "DayOfWeek"]
-cat = ["Customer", "Location", "BusinessType"]
-num = [c for c in features if c not in cat]
-split_date = model_df.WorkDate.quantile(0.80)
-train = model_df[model_df.WorkDate <= split_date]
-test = model_df[model_df.WorkDate > split_date]
-prep = ColumnTransformer([("cat", OneHotEncoder(handle_unknown="ignore"), cat), ("num", "passthrough", num)])
-model = Pipeline([("prep", prep), ("model", RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1, max_depth=18))])
-model.fit(train[features], train["TotalRevenue"])
-pred = model.predict(test[features])
-print(f"Split date: {split_date.date()}")
-print(f"MAE: ${mean_absolute_error(test['TotalRevenue'], pred):,.2f}")
-print(f"RMSE: ${mean_squared_error(test['TotalRevenue'], pred) ** 0.5:,.2f}")
-print(f"R2: {r2_score(test['TotalRevenue'], pred):.3f}")
+# 1. Order Count Distribution
+plt.figure(figsize=(10, 6))
+plt.hist(df["OrderCount"], bins=30, edgecolor="black")
+plt.title("Distribution of Order Count")
+plt.xlabel("Order Count")
+plt.ylabel("Frequency")
+plt.tight_layout()
+plt.savefig(
+    IMAGES_DIR / "order_count_distribution.png",
+    dpi=180,
+    bbox_inches="tight",
+)
+plt.close()
+
+# 2. Total Revenue Boxplot
+plt.figure(figsize=(10, 5))
+plt.boxplot(df["TotalRevenue"], vert=False)
+plt.title("Distribution of Total Revenue")
+plt.xlabel("Total Revenue")
+plt.tight_layout()
+plt.savefig(
+    IMAGES_DIR / "total_revenue_boxplot.png",
+    dpi=180,
+    bbox_inches="tight",
+)
+plt.close()
+
+# 3. Business Type Distribution
+business_counts = df["BusinessType"].value_counts()
+
+plt.figure(figsize=(9, 6))
+business_counts.plot(kind="bar")
+plt.title("Deliveries by Business Type")
+plt.xlabel("Business Type")
+plt.ylabel("Number of Records")
+plt.xticks(rotation=0)
+plt.tight_layout()
+plt.savefig(
+    IMAGES_DIR / "business_type_count.png",
+    dpi=180,
+    bbox_inches="tight",
+)
+plt.close()
+
+# 4. Relationships Between Numeric Features
+numeric_columns = [
+    "OrderCount",
+    "NumberOfPieces",
+    "TotalRevenue",
+]
+
+sample_df = df[numeric_columns].sample(
+    min(3000, len(df)),
+    random_state=42,
+)
+
+pd.plotting.scatter_matrix(
+    sample_df,
+    figsize=(10, 10),
+    diagonal="hist",
+)
+
+plt.suptitle(
+    "Relationships Between Numeric Features",
+    y=1.02,
+)
+plt.tight_layout()
+plt.savefig(
+    IMAGES_DIR / "numeric_features_pairplot.png",
+    dpi=180,
+    bbox_inches="tight",
+)
+plt.close()
+
+# Revenue Prediction
+X = df[["OrderCount", "NumberOfPieces"]]
+y = df["TotalRevenue"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X,
+    y,
+    test_size=0.2,
+    random_state=42,
+)
+
+model = LinearRegression()
+model.fit(X_train, y_train)
+
+predictions = model.predict(X_test)
+
+mse = mean_squared_error(y_test, predictions)
+rmse = mse ** 0.5
+r2 = r2_score(y_test, predictions)
+
+print("\nRevenue Prediction Results")
+print("--------------------------")
+print(f"RMSE: {rmse:,.2f}")
+print(f"R2 Score: {r2:.4f}")
+
+print("\nModel coefficients:")
+for feature, coefficient in zip(X.columns, model.coef_):
+    print(f"{feature}: {coefficient:.4f}")
+
+print(f"Intercept: {model.intercept_:.4f}")
+
+print("\nCharts generated successfully:")
+for image in sorted(IMAGES_DIR.glob("*.png")):
+    print(image.name)
